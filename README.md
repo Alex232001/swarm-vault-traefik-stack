@@ -1,0 +1,1 @@
+# swarm-vault-traefik-stack
