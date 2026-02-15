@@ -1,0 +1,106 @@
+---
+
+- name: Настройка Docker
+  hosts: all
+  become: yes
+  vars:
+    docker_keyring_path: /etc/apt/keyrings/docker.asc
+
+  tasks:
+    - name: Обновление apt и установка зависимостей
+      apt:
+        name:
+          - ca-certificates
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: Создание директории для ключей Docker
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Скачивание GPG ключа Docker
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: "{{ docker_keyring_path }}"
+        mode: '0644'
+
+    - name: Получение кодового имени Ubuntu
+      shell: |
+        . /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}"
+      register: ubuntu_codename
+      changed_when: false
+
+    - name: Добавление репозитория Docker
+      copy:
+        content: |
+          Types: deb
+          URIs: https://download.docker.com/linux/ubuntu
+          Suites: {{ ubuntu_codename.stdout }}
+          Components: stable
+          Signed-By: {{ docker_keyring_path }}
+        dest: /etc/apt/sources.list.d/docker.sources
+        mode: '0644'
+
+    - name: Обновление apt кэша
+      apt:
+        update_cache: yes
+
+    - name: Установка Docker CE
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Запуск и включение Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Добавление текущего пользователя в группу docker
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Обновить группу для текущей сессии
+      shell: |
+        sg docker -c "echo 'Group updated successfully'"
+      changed_when: false
+
+    - name: Проверка установки
+      command: docker --version
+      register: docker_version
+      changed_when: false
+
+    - name: Вывод информации об установке
+      debug:
+        msg: "Docker {{ docker_version.stdout }} успешно установлен"
+
+
+
+- name: Установка pip3 и Python модуля docker на все хосты
+  hosts: all
+  become: yes
+  gather_facts: no
+  tasks:
+    - name: Установить pip3
+      apt:
+        name: python3-pip
+        state: present
+        update_cache: no
+
+    - name: Установить модуль docker для Python
+      pip:
+        name: docker
+        state: present
+
+

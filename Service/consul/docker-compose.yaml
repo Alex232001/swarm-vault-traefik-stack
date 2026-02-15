@@ -1,0 +1,119 @@
+version: '3.8'
+
+networks:
+  traefik-public:
+    external: true
+    name: traefik-public  
+  internal-net:
+    external: true
+    name: internal-net  
+
+services:
+  consul-server1:
+    image: hashicorp/consul:1.22
+    deploy:
+      mode: replicated
+      replicas: 1
+
+      restart_policy:
+        condition: on-failure
+        delay: 30s     
+        max_attempts: 2 
+        window: 180s
+      
+      update_config:
+        parallelism: 1
+        delay: 60s
+        order: stop-first     
+        failure_action: rollback
+        monitor: 120s
+      
+      rollback_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: pause  
+
+      placement:
+        constraints:
+          - node.hostname == server-1
+
+      labels:
+        - "traefik.enable=true"
+        
+        # HTTPS
+        - "traefik.http.routers.consul-secure.rule=Host(`consul.stellarclaw.ru`)"
+        - "traefik.http.routers.consul-secure.entrypoints=websecure"
+        - "traefik.http.routers.consul-secure.tls=true"
+        - "traefik.http.routers.consul-secure.service=consul-server1"  
+        
+        # HTTP с редиректом
+        - "traefik.http.routers.consul-redirect.rule=Host(`consul.stellarclaw.ru`)"
+        - "traefik.http.routers.consul-redirect.entrypoints=web"
+        - "traefik.http.routers.consul-redirect.middlewares=redirect-to-https"
+        - "traefik.http.routers.consul-redirect.service=consul-server1" 
+
+        # Middleware для редиректа 
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+        
+        # Сервис Traefik 
+        - "traefik.http.services.consul-server1.loadbalancer.server.port=8500"
+        - "traefik.http.services.consul-server1.loadbalancer.server.scheme=http"
+
+        - "traefik.swarm.network=traefik-public"
+    networks:
+      - internal-net
+      - traefik-public
+    hostname: consul-server1
+
+    configs:
+      - source: consul_server_config
+        target: /consul/config/consul.hcl
+
+    volumes:
+      - type: volume
+        source: restored-consul-data
+        target: /consul/data
+
+
+    ports:
+      - target: 8600
+        published: 8600
+        protocol: tcp
+      - target: 8600
+        published: 8600
+        protocol: udp
+      
+      - target: 8300  # Server RPC
+        published: 8300
+        protocol: tcp
+      
+      - target: 8301  # Serf LAN
+        published: 8301
+        protocol: tcp
+        #mode: host  
+      
+      - target: 8302  # Serf WAN 
+        published: 8302
+        protocol: tcp
+        #mode: host
+
+    command: "consul agent -config-dir=/consul/config"
+
+    healthcheck:
+      test: |
+        # Проверяем доступность API Consul
+        curl -sf http://localhost:8500/v1/status/leader > /dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+configs:
+  consul_server_config:
+    external: true
+
+volumes:
+  restored-consul-data:
+    external: true
+

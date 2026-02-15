@@ -1,0 +1,31 @@
+[vms]
+%{ for vm_name, vm_config in vms ~}
+${vm_name} ansible_host=${vm_config.ansible_host} hostname=${vm_name}
+%{ endfor ~}
+
+# Группы по префиксам
+[servers]
+%{ for vm_name, vm_config in vms ~}
+%{ if startswith(vm_name, "server") ~}
+${vm_name} ansible_host=${vm_config.ansible_host} hostname=${vm_name}
+%{ endif ~}
+%{ endfor ~}
+
+[clients]
+%{ for vm_name, vm_config in vms ~}
+%{ if startswith(vm_name, "client") ~}
+${vm_name} ansible_host=${vm_config.ansible_host} hostname=${vm_name}
+%{ endif ~}
+%{ endfor ~}
+
+[vms:vars]
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ansible_user=ubuntu
+
+[servers:vars]
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ansible_user=ubuntu
+
+[clients:vars]
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ansible_user=ubuntu

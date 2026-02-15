@@ -1,0 +1,87 @@
+version: '3.8'
+
+networks:
+  internal-net:
+    external: true
+    name: internal-net
+
+volumes:
+  vault-tokens-local:
+    driver: local
+
+configs:
+  vault-client-config:
+    external: true
+  vault-templates-certificate:
+    external: true
+  vault-templates-private-key:
+    external: true
+  vault-role_id:
+    external: true
+  vault-secret_id:
+    external: true
+
+
+services:
+  vault-agent:
+    image: hashicorp/vault:1.21 
+    user: "1006:1008" 
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure  
+        delay: 10s
+        max_attempts: 5        
+        window: 180s
+      
+      update_config:
+        parallelism: 1          
+        delay: 30s              
+        order: start-first      
+        failure_action: rollback
+        monitor: 60s        
+
+      rollback_config:
+        parallelism: 2         
+        delay: 15s
+        failure_action: continue  
+
+      placement:      
+        constraints:
+          - node.role == manager
+    networks:
+      - internal-net  
+
+    configs:
+      - source: vault-client-config
+        target: /etc/vault-agent.hcl
+      - source: vault-templates-certificate
+        target: /templates/certificate.tmpl
+      - source: vault-templates-private-key
+        target: /templates/private_key.tmpl
+
+      - source: vault-role_id
+        target: /secrets/role_id
+      - source: vault-secret_id
+        target: /secrets/secret_id
+
+    volumes:
+      - /opt/traefik/certs:/certs:rw
+      - /opt/vault-agent:/vault/tokens:rw
+
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+      VAULT_SKIP_VERIFY: "true"
+
+      SKIP_SETCAP: "true"
+      VAULT_DISABLE_MLOCK: "true"
+    command: vault agent -config=/etc/vault-agent.hcl -log-level=debug
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "vault", "status", "-format=json"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
+
