@@ -1,0 +1,29 @@
+version: '3.8'
+
+networks:
+  internal-net:
+    external: true
+    name: internal-net  
+
+services:
+  cadvisor:
+    image: ghcr.io/google/cadvisor:latest
+    hostname: '{{.Node.Hostname}}-cadvisor'
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - internal-net
+    deploy:
+      mode: global
+      resources:
+        reservations:
+          memory: 256M
+        limits:
+          memory: 512M
+    privileged: true
+    devices:
+      - /dev/kmsg

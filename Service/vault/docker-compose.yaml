@@ -1,0 +1,95 @@
+version: '3.8'
+
+networks:
+  traefik-public:
+    external: true
+    name: traefik-public  
+  internal-net:
+    external: true
+    name: internal-net
+
+services:
+  vault:
+    image: hashicorp/vault:latest #1.21
+    hostname: vault
+    deploy:
+      mode: replicated
+      replicas: 1
+
+      restart_policy:
+        condition: on-failure
+        delay: 10s  
+        max_attempts: 3
+        window: 120s
+
+      update_config:
+        parallelism: 1          
+        delay: 90s             
+        order: stop-first       
+        failure_action: rollback 
+        monitor: 180s           
+        max_failure_ratio: 0    
+
+      rollback_config:
+        parallelism: 1
+        delay: 60s
+        failure_action: pause  
+  
+      placement:
+        constraints:
+          - node.hostname == server-1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.vault.rule=Host(`vault.stellarclaw.ru`)"
+        - "traefik.http.routers.vault.entrypoints=websecure"
+        - "traefik.http.routers.vault.tls=true"
+        - "traefik.http.services.vault.loadbalancer.server.port=8200"
+        - "traefik.http.services.vault.loadbalancer.server.scheme=http"
+        - "traefik.swarm.network=traefik-public"
+    networks:
+      - internal-net  
+      - traefik-public  
+    environment:
+      VAULT_ADDR: "http://0.0.0.0:8200"
+      VAULT_API_ADDR: "http://vault:8200"
+      VAULT_CLUSTER_ADDR: "http://vault:8201"
+
+    configs:
+      - source: vault_server_config
+        target: /etc/vault.hcl
+
+    volumes:
+      - type: volume
+        source: vault-data
+        target: /vault/data
+      - type: volume
+        source: vault-logs
+        target: /vault/logs
+    cap_add:
+      - IPC_LOCK
+    command:  server -config=/etc/vault.hcl
+
+# Нету curl на текущий момент в образе
+#    healthcheck:
+#      test: "curl -sf http://localhost:8200/v1/sys/health || exit 1"
+#      interval: 30s
+#      timeout: 10s
+#      retries: 3
+#      start_period: 60s
+
+    healthcheck:
+      test: ["CMD", "vault", "status", "-format=json"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
+
+configs:
+  vault_server_config:
+    external: true
+
+volumes:
+  vault-data:
+    driver: local
+  vault-logs:
+    driver: local

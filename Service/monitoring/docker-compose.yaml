@@ -1,0 +1,164 @@
+version: '3.8'
+
+services:
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+    volumes:
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == server-1
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+
+        # HTTPS маршрут для Prometheus
+        - "traefik.http.routers.prometheus-secure.rule=Host(`prometheus.stellarclaw.ru`)"
+        - "traefik.http.routers.prometheus-secure.entrypoints=websecure"
+        - "traefik.http.routers.prometheus-secure.tls=true"
+        - "traefik.http.routers.prometheus-secure.service=prometheus-service"
+        
+        # HTTP редирект для Prometheus
+        - "traefik.http.routers.prometheus-redirect.rule=Host(`prometheus.stellarclaw.ru`)"
+        - "traefik.http.routers.prometheus-redirect.entrypoints=web"
+        - "traefik.http.routers.prometheus-redirect.middlewares=redirect-to-https"
+        - "traefik.http.routers.prometheus-redirect.service=prometheus-service"
+        
+        # Сервис Prometheus
+        - "traefik.http.services.prometheus-service.loadbalancer.server.port=9090"
+        - "traefik.http.services.prometheus-service.loadbalancer.server.scheme=http"
+        
+        # Сеть Traefik
+        - "traefik.swarm.network=traefik-public"
+
+    networks:
+      - traefik-public
+      - internal-net
+
+
+  # Grafana
+  grafana:
+    image: grafana/grafana-oss:latest
+    configs:
+      - source: grafana_dashboards
+        target: /etc/grafana/provisioning/dashboards.yaml
+      - source: grafana_datasource
+        target: /etc/grafana/provisioning/datasources.yaml
+
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == server-1
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+      labels:
+        # Включить Traefik для этого сервиса
+        - "traefik.enable=true"
+        
+        # HTTPS маршрут для Grafana
+        - "traefik.http.routers.grafana-secure.rule=Host(`grafana.stellarclaw.ru`)"
+        - "traefik.http.routers.grafana-secure.entrypoints=websecure"
+        - "traefik.http.routers.grafana-secure.tls=true"
+        - "traefik.http.routers.grafana-secure.service=grafana-service"
+        
+        # HTTP редирект для Grafana
+        - "traefik.http.routers.grafana-redirect.rule=Host(`grafana.stellarclaw.ru`)"
+        - "traefik.http.routers.grafana-redirect.entrypoints=web"
+        - "traefik.http.routers.grafana-redirect.middlewares=redirect-to-https"
+        - "traefik.http.routers.grafana-redirect.service=grafana-service"
+        
+        # Middleware для редиректа 
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+        
+        # Сервис Grafana
+        - "traefik.http.services.grafana-service.loadbalancer.server.port=3000"
+        - "traefik.http.services.grafana-service.loadbalancer.server.scheme=http"
+        
+        # Сеть Traefik
+        - "traefik.swarm.network=traefik-public"
+
+    networks:
+      - traefik-public
+      - internal-net
+
+  # Node Exporter
+  node-exporter:
+    image: prom/node-exporter:latest
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+    networks:
+      - traefik-public
+      - internal-net
+
+networks:
+  internal-net:
+    external: true
+    name: internal-net  
+
+  traefik-public:
+    external: true
+    name: traefik-public
+
+
+volumes:
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+configs:
+  prometheus_config:
+    external: true
+  grafana_dashboards:
+    external: true
+  grafana_datasource:
+    external: true
+
+
+secrets:
+  grafana_admin_password:
+    external: true

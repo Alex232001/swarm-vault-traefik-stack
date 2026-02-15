@@ -1,0 +1,118 @@
+version: '3.8'
+
+networks:
+  traefik-public:
+    external: true
+    name: traefik-public
+  internal-net:
+    external: true
+    name: internal-net
+
+configs:
+  traefik-dynamic-config:
+    external: true
+
+services:
+  traefik:
+    image: traefik:latest # 3.6.7
+    user: "1006:999" 
+
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 120s
+
+      update_config:
+        parallelism: 1           
+        delay: 30s              
+        order: start-first      
+        failure_action: rollback 
+        monitor: 60s            
+        max_failure_ratio: 0  
+             
+      rollback_config:
+        parallelism: 2          
+        delay: 15s
+        failure_action: pause   
+
+      placement:    
+        constraints:
+          - node.role == manager
+    labels:
+      - "traefik.enable=true"
+
+      # Dashboard router
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.stellarclaw.ru`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+
+      # Для редиректа на HTTPS
+      - "traefik.http.routers.traefik-dashboard-http.rule=Host(`traefik.stellarclaw.ru`)"
+      - "traefik.http.routers.traefik-dashboard-http.entrypoints=web"
+      - "traefik.http.routers.traefik-dashboard-http.middlewares=redirect-to-https"
+
+      # Middleware для редиректа
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+
+      # Basic‑auth middleware 
+      - "traefik.http.middlewares.dashboard-auth.basicauth.users=admin:$$2y$$05$$lgFT7FjhBNezPw5/GBhlhOzg5VDJVgLnXNdl7W2Lv3seepSo0zO0m"
+      - "traefik.http.routers.traefik-dashboard.middlewares=dashboard-auth@docker"
+
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.swarm=true"
+
+      - "--providers.consulcatalog=true"
+      - "--providers.consulcatalog.endpoint.address=consul-server1:8500"
+      - "--providers.consulcatalog.prefix=traefik"
+      - "--providers.consulcatalog.refreshinterval=15s"
+      - "--providers.consulcatalog.stale=false"
+
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.docker.exposedbydefault=false"
+      - "--log.level=INFO"
+      - "--providers.file.filename=/dynamic/tls.yaml"
+      - "--providers.docker.network=traefik-public" 
+      - "--providers.docker.useBindPortIP=false" 
+      - "--providers.file.directory=/dynamic"
+      - "--providers.file.watch=true"
+      - "--accesslog=true"
+      - "--serversTransport.rootCAs=/certs/ca.crt"
+      - "--providers.swarm.exposedbydefault=false"
+
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.entryPoint=metrics"  
+      - "--entrypoints.metrics.address=:8082"
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+      - target: 8082
+        published: 8082
+        protocol: tcp
+        mode: host  # Для метрик
+
+    configs:
+      - source: traefik-dynamic-config
+        target: /dynamic/tls.yml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/traefik/certs:/certs:ro
+    networks:
+      - traefik-public
+      - internal-net
+
+

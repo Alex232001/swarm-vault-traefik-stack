@@ -1,0 +1,64 @@
+version: '3.8'
+
+networks:
+  internal-net:
+    external: true
+    name: internal-net
+
+services:
+  consul-client:
+    image: hashicorp/consul:1.22
+    deploy:
+      mode: global  
+
+      update_config:
+        parallelism: 1
+        delay: 60s
+        order: stop-first
+        failure_action: rollback
+        monitor: 120s
+      
+      rollback_config:
+        parallelism: 1
+        delay: 30s
+        failure_action: pause
+
+      restart_policy:
+        condition: on-failure
+        delay: 30s      
+        max_attempts: 2 
+        window: 180s
+
+
+    networks:
+      internal-net:
+        aliases:
+          - consul-client  
+
+    configs:
+      - source: consul-client-config
+        target: /consul/config/client.hcl
+
+    volumes:
+      - consul-data:/consul/data  
+    environment:
+      NODE_NAME: "swarm-node-{{.Node.ID}}"  
+    command: 
+      - sh
+      - -c
+      - consul agent -config-dir=/consul/config -node="$${NODE_NAME}"
+
+    healthcheck:
+      test: "curl -sf http://localhost:8500/v1/agent/self || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+configs:
+  consul-client-config:
+    external: true
+
+volumes:
+  consul-data:
+    driver: local

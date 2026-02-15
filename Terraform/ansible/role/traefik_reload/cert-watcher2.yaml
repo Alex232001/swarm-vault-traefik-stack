@@ -1,0 +1,65 @@
+---
+- name: Deploy certificate watcher
+  hosts: servers
+  become: yes
+  vars:
+    script_path: "/usr/local/bin/cert-watcher.sh"
+    service_name: "cert-watcher"
+
+  tasks:
+    - name: Copy certificate watcher script
+      copy:
+        src: ./cert-watcher.sh
+        dest: "{{ script_path }}"
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create systemd service for cert-watcher
+      copy:
+        dest: "/etc/systemd/system/{{ service_name }}.service"
+        content: |
+          [Unit]
+          Description=Certificate Watcher Service
+          After=network.target
+          
+          [Service]
+          Type=simple
+          ExecStart={{ script_path }}
+          Restart=always
+          RestartSec=10
+          User=root
+          Group=root
+          
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Stop and disable old service if exists
+      systemd:
+        name: "{{ service_name }}"
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Start and enable cert-watcher service
+      systemd:
+        name: "{{ service_name }}"
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Check service status
+      systemd:
+        name: "{{ service_name }}"
+      register: service_status
+
+    - name: Show service status
+      debug:
+        msg: "Certificate watcher service is {{ service_status.status.ActiveState }}"

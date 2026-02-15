@@ -1,0 +1,72 @@
+---
+- name: Deploy SSL certificate monitor with systemd
+  hosts: servers
+  become: yes
+  
+  tasks:
+    - name: Copy certificate check script
+      copy:
+        src: certs_update.sh
+        dest: /usr/local/bin/cert-check.sh
+        owner: root
+        group: root
+        mode: '0755'
+    
+    - name: Copy service account key
+      copy:
+        src: lego-service-account-key.json
+        dest: /usr/local/bin/lego-service-account-key.json
+        owner: root
+        group: root
+        mode: '0600'
+    
+    - name: Create systemd service
+      copy:
+        dest: /etc/systemd/system/cert-check.service
+        content: |
+          [Unit]
+          Description=SSL Certificate Check and Renew
+          After=docker.service
+          Requires=docker.service
+          
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/cert-check.sh
+          StandardOutput=journal
+          StandardError=journal
+          
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+    
+    - name: Create daily systemd timer
+      copy:
+        dest: /etc/systemd/system/cert-check.timer
+        content: |
+          [Unit]
+          Description=Daily SSL certificate check
+          [Timer]
+          OnCalendar=*:0/3  # Для теста
+
+          # Для ежедневного запуска 
+          # OnCalendar=daily
+          # Случайная задержка
+          # RandomizedDelaySec=30
+
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start timer
+      systemd:
+        name: cert-check.timer
+        daemon_reload: yes
+        enabled: yes
+        state: started
+

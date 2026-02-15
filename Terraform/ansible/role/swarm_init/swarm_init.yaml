@@ -1,0 +1,196 @@
+- name: Показать информацию о группах
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Вывести список серверов
+      debug:
+        msg: "Серверы: {{ groups['servers'] }}"
+
+    - name: Вывести список клиентов
+      debug:
+        msg: "Клиенты: {{ groups['clients'] }}"
+
+    - name: Определить первый сервер
+      debug:
+        msg: "Первый сервер (будет лидером): {{ groups['servers'][0] }}"
+
+- name: Инициализация Docker Swarm на первом сервере
+  hosts: "{{ groups['servers'][0] }}"
+  gather_facts: no
+  become: yes
+  tasks:
+    - name: Проверка, установлен ли Docker
+      command: which docker
+      register: docker_check
+      ignore_errors: yes
+
+    - name: Сообщение если Docker не установлен
+      debug:
+        msg: "Docker не найден на {{ inventory_hostname }}!"
+      when: docker_check.rc != 0
+
+    - name: Проверка текущего статуса Swarm
+      command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_state
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Отобразить текущий статус Swarm
+      debug:
+        msg: "Текущий статус Swarm: {{ swarm_state.stdout }}"
+
+
+    - name: Инициализация Swarm (если еще не инициализирован)
+      community.docker.docker_swarm:
+        state: present
+        advertise_addr: "{{ ansible_host }}"
+      when: swarm_state.stdout != "active"
+      register: swarm_init_result
+
+
+    - name: Пауза после инициализации Swarm
+      pause:
+        seconds: 15
+      when: swarm_state.stdout != "active"
+
+
+    - name: Сообщение об инициализации
+      debug:
+        msg: " Swarm инициализирован на {{ inventory_hostname }}"
+      when: swarm_state.stdout != "active"
+
+    - name: Получить токен для manager
+      command: docker swarm join-token manager -q
+      register: manager_token
+      changed_when: false
+
+    - name: Получить токен для worker
+      command: docker swarm join-token worker -q
+      register: worker_token
+      changed_when: false
+
+    - name: Сохранить токены как факты
+      set_fact:
+        swarm_manager_token: "{{ manager_token.stdout }}"
+        swarm_worker_token: "{{ worker_token.stdout }}"
+        swarm_leader_ip: "{{ ansible_host }}"
+
+#    - name: Показать токены
+#      debug:
+#        msg: |
+#          Лидер Swarm: {{ swarm_leader_ip }}
+#          Токен manager: {{ swarm_manager_token }}
+#          Токен worker: {{ swarm_worker_token }}
+
+
+
+- name: Распространить информацию о Swarm
+  hosts: localhost
+  gather_facts: false
+  become: yes
+  tasks:
+    - name: Получить информацию с лидера
+      set_fact:
+        swarm_leader_ip: "{{ hostvars[groups['servers'][0]].swarm_leader_ip }}"
+        swarm_manager_token: "{{ hostvars[groups['servers'][0]].swarm_manager_token }}"
+        swarm_worker_token: "{{ hostvars[groups['servers'][0]].swarm_worker_token }}"
+
+    - name: Показать для отладки
+      debug:
+        msg: |
+          Информация получена с лидера:
+          IP лидера: {{ swarm_leader_ip }}
+#          Manager токен: {{ swarm_manager_token }}
+#          Worker токен: {{ swarm_worker_token }}
+
+###################  servers ######################
+
+
+- name: Добавить остальные серверы как managers
+  hosts: "servers[1:]"
+  gather_facts: false
+  become: yes
+
+  tasks:
+    - name: Показать какой сервер добавляется
+      debug:
+        msg: "Добавляем сервер {{ inventory_hostname }} как manager"
+
+    - name: Получить данные о Swarm с localhost
+      set_fact:
+        leader_ip: "{{ hostvars['localhost'].swarm_leader_ip }}"
+        manager_token: "{{ hostvars['localhost'].swarm_manager_token }}"
+
+    - name: Проверить текущий статус Swarm
+      command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_state
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Присоединиться к Swarm как manager
+      community.docker.docker_swarm:
+        state: join
+        advertise_addr: "{{ ansible_host }}"
+        join_token: "{{ manager_token }}"
+        remote_addrs:
+          - "{{ leader_ip }}:2377"
+      when: swarm_state.stdout != "active"
+      register: join_result
+
+    - name: Сообщение об успешном добавлении
+      debug:
+        msg: "Сервер {{ inventory_hostname }} добавлен как manager"
+      when: "join_result.changed"
+
+    - name: Сообщение если уже в Swarm
+      debug:
+        msg: "Сервер {{ inventory_hostname }} уже в Swarm (статус: {{ swarm_state.stdout }})"
+      when: swarm_state.stdout == "active"
+
+
+
+############ clients #################
+- name: Добавить клиентов в Swarm
+  hosts: clients
+  gather_facts: false
+  become: yes
+  tasks:
+
+    - name: Показать какой клиент добавляется
+      debug:
+        msg: "Добавляем клиент {{ inventory_hostname }} как worker"
+
+    - name: Получить данные о Swarm с localhost
+      set_fact:
+        leader_ip: "{{ hostvars['localhost'].swarm_leader_ip }}"
+        worker_token: "{{ hostvars['localhost'].swarm_worker_token }}"
+
+    - name: Проверить текущий статус Swarm
+      command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_state   # active  or inactive
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Отобразить статус Swarm
+      debug:
+        msg: "Статус Swarm на {{ inventory_hostname }}: {{ swarm_state.stdout }}"
+
+    - name: Присоединиться к Swarm как worker
+      community.docker.docker_swarm:
+        state: join
+        advertise_addr: "{{ ansible_host }}"
+        join_token: "{{ worker_token }}"
+        remote_addrs:
+          - "{{ leader_ip }}:2377"
+      when: swarm_state.stdout != "active"
+      register: join_result
+
+    - name: Сообщение об успешном добавлении
+      debug:
+        msg: " Клиент {{ inventory_hostname }} добавлен как worker"
+      when: "join_result.changed"
+
+    - name: Сообщение если уже в Swarm
+      debug:
+        msg: "Клиент {{ inventory_hostname }} уже в Swarm (статус: {{ swarm_state.stdout }})"
+      when: swarm_state.stdout == "active"
